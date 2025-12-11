@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTSP 얼굴 블러 서버</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e4e4e7;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 30px;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #00d9ff;
+        }
+        .stat-label { color: #a1a1aa; margin-top: 5px; }
+        
+        .section {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 25px;
+        }
+        .section-title {
+            font-size: 1.3rem;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        .form-group { margin-bottom: 15px; }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #a1a1aa;
+            font-size: 0.9rem;
+        }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 1rem;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: #00d9ff;
+        }
+        input:invalid {
+            border-color: #ef4444;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            color: #000;
+            font-weight: bold;
+        }
+        .btn-primary:hover { transform: translateY(-2px); }
+        .btn-danger { background: #ef4444; color: #fff; }
+        .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .stream-list { margin-top: 20px; }
+        .stream-card {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 15px;
+            align-items: start;
+        }
+        @media (max-width: 768px) {
+            .stream-card {
+                grid-template-columns: 1fr;
+            }
+        }
+        .stream-info h3 { margin-bottom: 8px; }
+        .stream-meta { 
+            color: #a1a1aa; 
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+        }
+        .url-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            padding: 8px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 6px;
+        }
+        .url-label {
+            min-width: 50px;
+            color: #00d9ff;
+            font-weight: 500;
+            font-size: 0.8rem;
+        }
+        .url-value {
+            flex: 1;
+            color: #e4e4e7;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+        }
+        .url-copy-btn {
+            padding: 4px 10px;
+            background: rgba(0,217,255,0.2);
+            border: 1px solid rgba(0,217,255,0.3);
+            border-radius: 4px;
+            color: #00d9ff;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .url-copy-btn:hover {
+            background: rgba(0,217,255,0.3);
+            border-color: #00d9ff;
+        }
+        .url-copy-btn:active {
+            transform: scale(0.95);
+        }
+        .stream-stats {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .stream-stat {
+            background: rgba(255,255,255,0.05);
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        .stream-actions { 
+            display: flex; 
+            gap: 10px; 
+            flex-wrap: wrap;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+        .status-running { background: #22c55e; color: #000; }
+        .status-stopped { background: #71717a; color: #fff; }
+        .status-pending { background: #f59e0b; color: #000; }
+        .status-starting { background: #3b82f6; color: #fff; }
+        .status-error { background: #ef4444; color: #fff; }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            overflow-y: auto;
+        }
+        .modal.active { 
+            display: flex !important; 
+        }
+        .modal-content {
+            background: #1a1a2e;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+        }
+        .modal-title { margin-bottom: 20px; }
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+        
+        .error-message {
+            background: rgba(239,68,68,0.2);
+            border: 1px solid rgba(239,68,68,0.5);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 10px;
+            color: #fca5a5;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎭 RTSP 얼굴 블러 서버</h1>
+        
+        <!-- 서버 상태 -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="total-streams">0</div>
+                <div class="stat-label">전체 스트림</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="running-streams">0</div>
+                <div class="stat-label">실행 중</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="cpu-usage">0%</div>
+                <div class="stat-label">CPU 사용률</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="memory-usage">0MB</div>
+                <div class="stat-label">메모리</div>
+            </div>
+        </div>
+        
+        <!-- 새 스트림 추가 -->
+        <div class="section">
+            <div class="section-title">➕ 새 스트림 추가</div>
+            <form id="add-stream-form">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>스트림 이름</label>
+                        <input type="text" id="stream-name" placeholder="예: 카메라1" required>
+                    </div>
+                    <div class="form-group">
+                        <label>입력 RTSP URL</label>
+                        <input type="text" id="input-url" placeholder="rtsp://..." required>
+                    </div>
+                    <div class="form-group">
+                        <label>출력 RTSP URL (Flashphoner)</label>
+                        <input type="text" id="output-url" placeholder="rtsp://flashphoner/..." required>
+                    </div>
+                    <div class="form-group">
+                        <label>신뢰도 (0.01~1.0, 낮을수록 민감)</label>
+                        <input type="number" id="confidence" value="0.15" min="0.01" max="1" step="0.01">
+                        <small style="color: #71717a; font-size: 0.8rem;">권장: 0.15 이상 (0.1 미만은 매우 느림)</small>
+                    </div>
+                    <div class="form-group">
+                        <label>익명화 방법</label>
+                        <select id="anonymize-method" onchange="updateMethodSettings()">
+                            <option value="pixelate" selected>픽셀화 (빠름 ⚡)</option>
+                            <option value="mosaic">모자이크 (빠름 ⚡)</option>
+                            <option value="blur">블러 (느림, 부드러움)</option>
+                            <option value="black">검은 박스 (가장 빠름)</option>
+                            <option value="solid">단색 채우기 (빠름)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="blur-strength-group">
+                        <label>블러 강도 (홀수, blur 방법만)</label>
+                        <input type="number" id="blur-strength" value="31" min="11" max="101" step="2">
+                        <small style="color: #71717a; font-size: 0.8rem;">권장: 31~51</small>
+                    </div>
+                    <div class="form-group" id="pixelate-size-group">
+                        <label>픽셀화 크기 (pixelate/mosaic 방법)</label>
+                        <input type="number" id="pixelate-size" value="10" min="5" max="50" step="1">
+                        <small style="color: #71717a; font-size: 0.8rem;">작을수록 더 강한 픽셀화 (5~15 권장)</small>
+                    </div>
+                    <div class="form-group">
+                        <label>이미지 크기 (320/480/640)</label>
+                        <select id="imgsz">
+                            <option value="320" selected>320 (경량, 빠름)</option>
+                            <option value="480">480 (권장, 균형)</option>
+                            <option value="640">640 (정확, 느림 ⚠️)</option>
+                        </select>
+                        <small style="color: #71717a; font-size: 0.8rem;">640은 320보다 4배 느립니다</small>
+                    </div>
+                    <div class="form-group">
+                        <label>NMS IoU 임계값 (0.1~1.0, 낮을수록 더 많은 감지)</label>
+                        <input type="number" id="iou-threshold" value="0.45" min="0.1" max="1.0" step="0.05">
+                        <small style="color: #71717a; font-size: 0.8rem;">측면 얼굴 감지 개선: 0.3~0.4 권장</small>
+                    </div>
+                    <div class="form-group">
+                        <label>박스 확장 비율 (0.0~0.5, 측면 얼굴 커버)</label>
+                        <input type="number" id="box-expand" value="0.1" min="0.0" max="0.5" step="0.05">
+                        <small style="color: #71717a; font-size: 0.8rem;">0.1 = 10% 확장, 측면 얼굴 감지 개선</small>
+                    </div>
+                </div>
+                <div id="form-error" class="error-message" style="display: none;"></div>
+                <button type="submit" class="btn btn-primary">스트림 추가</button>
+            </form>
+        </div>
+        
+        <!-- 스트림 목록 -->
+        <div class="section">
+            <div class="section-title">📺 스트림 목록</div>
+            <div class="stream-list" id="stream-list">
+                <p style="color: #71717a;">스트림이 없습니다. 위에서 새 스트림을 추가하세요.</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 설정 수정 모달 -->
+    <div class="modal" id="settings-modal" onclick="if(event.target === this) closeModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-title">⚙️ 스트림 설정 수정</div>
+            <input type="hidden" id="edit-stream-id">
+            <div class="form-group">
+                <label>스트림 이름</label>
+                <input type="text" id="edit-name" required>
+            </div>
+            <div class="form-group">
+                <label>신뢰도 (0.01~1.0, 낮을수록 민감)</label>
+                <input type="number" id="edit-confidence" min="0.01" max="1" step="0.01" required>
+            </div>
+            <div class="form-group">
+                <label>익명화 방법</label>
+                <select id="edit-anonymize-method" onchange="updateEditMethodSettings()">
+                    <option value="pixelate">픽셀화 (빠름 ⚡)</option>
+                    <option value="mosaic">모자이크 (빠름 ⚡)</option>
+                    <option value="blur">블러 (느림)</option>
+                    <option value="black">검은 박스</option>
+                    <option value="solid">단색 채우기</option>
+                </select>
+            </div>
+            <div class="form-group" id="edit-blur-strength-group" style="display: none;">
+                <label>블러 강도 (홀수)</label>
+                <input type="number" id="edit-blur-strength" min="11" max="101" step="2">
+            </div>
+            <div class="form-group" id="edit-pixelate-size-group">
+                <label>픽셀화 크기 (5~50)</label>
+                <input type="number" id="edit-pixelate-size" min="5" max="50" step="1">
+            </div>
+            <div class="form-group">
+                <label>이미지 크기</label>
+                <select id="edit-imgsz">
+                    <option value="320">320 (경량)</option>
+                    <option value="480">480 (권장)</option>
+                    <option value="640">640 (정확)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>NMS IoU 임계값 (0.1~1.0)</label>
+                <input type="number" id="edit-iou-threshold" min="0.1" max="1.0" step="0.05">
+            </div>
+            <div class="form-group">
+                <label>박스 확장 비율 (0.0~0.5)</label>
+                <input type="number" id="edit-box-expand" min="0.0" max="0.5" step="0.05">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+                <button class="btn btn-primary" onclick="saveSettings()">저장</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        
+        let isLoadingStreams = false;
+        let isLoadingStats = false;
+        
+        // 폼 검증 함수
+        function validateForm() {
+            const name = document.getElementById('stream-name').value.trim();
+            const inputUrl = document.getElementById('input-url').value.trim();
+            const outputUrl = document.getElementById('output-url').value.trim();
+            const errorDiv = document.getElementById('form-error');
+            
+            if (!name) {
+                errorDiv.textContent = '스트림 이름을 입력해주세요.';
+                errorDiv.style.display = 'block';
+                return false;
+            }
+            
+            if (!inputUrl) {
+                errorDiv.textContent = '입력 RTSP URL을 입력해주세요.';
+                errorDiv.style.display = 'block';
+                return false;
+            }
+            
+            if (!inputUrl.startsWith('rtsp://')) {
+                errorDiv.textContent = '입력 URL은 rtsp://로 시작해야 합니다.';
+                errorDiv.style.display = 'block';
+                return false;
+            }
+            
+            if (!outputUrl) {
+                errorDiv.textContent = '출력 RTSP URL을 입력해주세요.';
+                errorDiv.style.display = 'block';
+                return false;
+            }
+            
+            if (!outputUrl.startsWith('rtsp://')) {
+                errorDiv.textContent = '출력 URL은 rtsp://로 시작해야 합니다.';
+                errorDiv.style.display = 'block';
+                return false;
+            }
+            
+            errorDiv.style.display = 'none';
+            return true;
+        }
+        
+        // 폼 제출
+        document.getElementById('add-stream-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (!validateForm()) {
+                return;
+            }
+            
+            const submitButton = e.target.querySelector('button[type="submit"]');
+            const originalText = submitButton.textContent;
+            submitButton.disabled = true;
+            submitButton.textContent = '추가 중...';
+            
+            const blurStrength = document.getElementById('blur-strength').value;
+            const pixelateSize = document.getElementById('pixelate-size').value;
+            
+            const data = {
+                name: document.getElementById('stream-name').value.trim(),
+                input_url: document.getElementById('input-url').value.trim(),
+                output_url: document.getElementById('output-url').value.trim(),
+                blur_settings: {
+                    confidence_threshold: parseFloat(document.getElementById('confidence').value),
+                    anonymize_method: document.getElementById('anonymize-method').value,
+                    blur_strength: blurStrength ? parseInt(blurStrength, 10) : 31,
+                    pixelate_size: pixelateSize ? parseInt(pixelateSize, 10) : 10,
+                    imgsz: parseInt(document.getElementById('imgsz').value, 10),
+                    max_age: 25,
+                    smoothing: 0.5,
+                    iou_threshold: parseFloat(document.getElementById('iou-threshold').value),
+                    box_expand_ratio: parseFloat(document.getElementById('box-expand').value)
+                }
+            };
+            
+            try {
+                const res = await fetch(`${API_BASE}/streams`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                if (res.ok) {
+                    document.getElementById('add-stream-form').reset();
+                    document.getElementById('form-error').style.display = 'none';
+                    loadStreams();
+                } else {
+                    let errorMessage = '스트림 추가 실패';
+                    try {
+                        const error = await res.json();
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        errorMessage = `스트림 추가 실패 (${res.status} ${res.statusText})`;
+                    }
+                    const errorDiv = document.getElementById('form-error');
+                    errorDiv.textContent = errorMessage;
+                    errorDiv.style.display = 'block';
+                }
+            } catch (err) {
+                const errorDiv = document.getElementById('form-error');
+                errorDiv.textContent = '오류: ' + err.message;
+                errorDiv.style.display = 'block';
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = originalText;
+            }
+        });
+        
+        async function loadStreams() {
+            if (isLoadingStreams) return;
+            isLoadingStreams = true;
+            
+            try {
+                const res = await fetch(`${API_BASE}/streams`);
+                if (!res.ok) {
+                    const list = document.getElementById('stream-list');
+                    list.innerHTML = '<p style="color: #ef4444;">스트림 목록을 불러올 수 없습니다.</p>';
+                    return;
+                }
+                
+                const streams = await res.json();
+                const list = document.getElementById('stream-list');
+                
+                if (streams.length === 0) {
+                    list.innerHTML = '<p style="color: #71717a;">스트림이 없습니다.</p>';
+                    return;
+                }
+                
+                // 기존 내용 제거
+                list.innerHTML = '';
+                
+                streams.forEach(s => {
+                    const card = document.createElement('div');
+                    card.className = 'stream-card';
+                    
+                    const streamInfo = document.createElement('div');
+                    streamInfo.className = 'stream-info';
+                    
+                    const h3 = document.createElement('h3');
+                    const nameText = document.createTextNode(s.name + ' ');
+                    h3.appendChild(nameText);
+                    
+                    const statusSpan = document.createElement('span');
+                    statusSpan.className = `status status-${s.status}`;
+                    statusSpan.textContent = s.status;
+                    h3.appendChild(statusSpan);
+                    streamInfo.appendChild(h3);
+                    
+                    const meta = document.createElement('div');
+                    meta.className = 'stream-meta';
+                    meta.textContent = `ID: ${s.id}`;
+                    streamInfo.appendChild(meta);
+                    
+                    // 입력 URL
+                    const inputUrlItem = document.createElement('div');
+                    inputUrlItem.className = 'url-item';
+                    
+                    const inputLabel = document.createElement('span');
+                    inputLabel.className = 'url-label';
+                    inputLabel.textContent = '입력:';
+                    inputUrlItem.appendChild(inputLabel);
+                    
+                    const inputValue = document.createElement('span');
+                    inputValue.className = 'url-value';
+                    inputValue.textContent = s.input_url;
+                    inputUrlItem.appendChild(inputValue);
+                    
+                    const inputCopyBtn = document.createElement('button');
+                    inputCopyBtn.className = 'url-copy-btn';
+                    inputCopyBtn.textContent = '복사';
+                    inputCopyBtn.onclick = () => copyToClipboard(s.input_url, inputCopyBtn);
+                    inputUrlItem.appendChild(inputCopyBtn);
+                    
+                    streamInfo.appendChild(inputUrlItem);
+                    
+                    // 출력 URL
+                    const outputUrlItem = document.createElement('div');
+                    outputUrlItem.className = 'url-item';
+                    
+                    const outputLabel = document.createElement('span');
+                    outputLabel.className = 'url-label';
+                    outputLabel.textContent = '출력:';
+                    outputUrlItem.appendChild(outputLabel);
+                    
+                    const outputValue = document.createElement('span');
+                    outputValue.className = 'url-value';
+                    outputValue.textContent = s.output_url;
+                    outputUrlItem.appendChild(outputValue);
+                    
+                    const outputCopyBtn = document.createElement('button');
+                    outputCopyBtn.className = 'url-copy-btn';
+                    outputCopyBtn.textContent = '복사';
+                    outputCopyBtn.onclick = () => copyToClipboard(s.output_url, outputCopyBtn);
+                    outputUrlItem.appendChild(outputCopyBtn);
+                    
+                    streamInfo.appendChild(outputUrlItem);
+                    
+                    // 통계
+                    const stats = document.createElement('div');
+                    stats.className = 'stream-stats';
+                    
+                    const fpsStat = document.createElement('div');
+                    fpsStat.className = 'stream-stat';
+                    fpsStat.textContent = `FPS: ${s.fps.toFixed(1)}`;
+                    stats.appendChild(fpsStat);
+                    
+                    const facesStat = document.createElement('div');
+                    facesStat.className = 'stream-stat';
+                    facesStat.textContent = `얼굴: ${s.faces_detected}`;
+                    stats.appendChild(facesStat);
+                    
+                    const cpuStat = document.createElement('div');
+                    cpuStat.className = 'stream-stat';
+                    cpuStat.textContent = `CPU: ${s.cpu_usage.toFixed(0)}%`;
+                    stats.appendChild(cpuStat);
+                    
+                    const inferenceStat = document.createElement('div');
+                    inferenceStat.className = 'stream-stat';
+                    inferenceStat.textContent = `추론: ${s.inference_time_ms.toFixed(0)}ms`;
+                    stats.appendChild(inferenceStat);
+                    
+                    streamInfo.appendChild(stats);
+                    
+                    // 액션 버튼
+                    const actions = document.createElement('div');
+                    actions.className = 'stream-actions';
+                    
+                    if (s.status === 'running') {
+                        const stopBtn = document.createElement('button');
+                        stopBtn.className = 'btn btn-secondary';
+                        stopBtn.textContent = '중지';
+                        stopBtn.onclick = () => stopStream(s.id);
+                        actions.appendChild(stopBtn);
+                    } else {
+                        const startBtn = document.createElement('button');
+                        startBtn.className = 'btn btn-primary';
+                        startBtn.textContent = '시작';
+                        startBtn.onclick = () => startStream(s.id);
+                        actions.appendChild(startBtn);
+                    }
+                    
+                    const settingsBtn = document.createElement('button');
+                    settingsBtn.className = 'btn btn-secondary';
+                    settingsBtn.textContent = '설정';
+                    settingsBtn.onclick = () => openSettings(s.id);
+                    actions.appendChild(settingsBtn);
+                    
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'btn btn-danger';
+                    deleteBtn.textContent = '삭제';
+                    deleteBtn.onclick = () => deleteStream(s.id);
+                    actions.appendChild(deleteBtn);
+                    
+                    card.appendChild(streamInfo);
+                    card.appendChild(actions);
+                    list.appendChild(card);
+                });
+            } catch (err) {
+                const list = document.getElementById('stream-list');
+                list.innerHTML = '<p style="color: #ef4444;">스트림 목록을 불러오는 중 오류가 발생했습니다.</p>';
+            } finally {
+                isLoadingStreams = false;
+            }
+        }
+        
+        async function loadStats() {
+            if (isLoadingStats) return;
+            isLoadingStats = true;
+            
+            try {
+                const res = await fetch(`${API_BASE}/stats`);
+                if (!res.ok) return;
+                
+                const stats = await res.json();
+                document.getElementById('total-streams').textContent = stats.total_streams;
+                document.getElementById('running-streams').textContent = stats.running_streams;
+                document.getElementById('cpu-usage').textContent = stats.total_cpu_usage.toFixed(0) + '%';
+                document.getElementById('memory-usage').textContent = stats.total_memory_mb.toFixed(0) + 'MB';
+            } catch (err) {
+                // 조용히 실패
+            } finally {
+                isLoadingStats = false;
+            }
+        }
+        
+        // 스트림 시작
+        async function startStream(id) {
+            try {
+                const res = await fetch(`${API_BASE}/streams/${id}/start`, { method: 'POST' });
+                
+                if (!res.ok) {
+                    let errorMessage = '스트림 시작 실패';
+                    try {
+                        const error = await res.json();
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        errorMessage = `스트림 시작 실패 (${res.status} ${res.statusText})`;
+                    }
+                    alert(errorMessage);
+                    return;
+                }
+                
+                loadStreams();
+            } catch (err) {
+                alert('오류: ' + err.message);
+            }
+        }
+        
+        // 스트림 중지
+        async function stopStream(id) {
+            try {
+                const res = await fetch(`${API_BASE}/streams/${id}/stop`, { method: 'POST' });
+                
+                if (!res.ok) {
+                    let errorMessage = '스트림 중지 실패';
+                    try {
+                        const error = await res.json();
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        errorMessage = `스트림 중지 실패 (${res.status} ${res.statusText})`;
+                    }
+                    alert(errorMessage);
+                    return;
+                }
+                
+                loadStreams();
+            } catch (err) {
+                alert('오류: ' + err.message);
+            }
+        }
+        
+        // 스트림 삭제
+        async function deleteStream(id) {
+            if (!confirm('정말 삭제하시겠습니까?')) return;
+            
+            try {
+                const res = await fetch(`${API_BASE}/streams/${id}`, { method: 'DELETE' });
+                
+                if (!res.ok) {
+                    let errorMessage = '스트림 삭제 실패';
+                    try {
+                        const error = await res.json();
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        errorMessage = `스트림 삭제 실패 (${res.status} ${res.statusText})`;
+                    }
+                    alert(errorMessage);
+                    return;
+                }
+                
+                loadStreams();
+            } catch (err) {
+                alert('오류: ' + err.message);
+            }
+        }
+        
+        async function openSettings(id) {
+            try {
+                const res = await fetch(`${API_BASE}/streams/${id}`);
+                if (!res.ok) {
+                    alert('스트림 정보를 가져올 수 없습니다.');
+                    return;
+                }
+                const stream = await res.json();
+                
+                document.getElementById('edit-stream-id').value = id;
+                document.getElementById('edit-name').value = stream.name;
+                document.getElementById('edit-confidence').value = stream.blur_settings.confidence_threshold;
+                document.getElementById('edit-anonymize-method').value = stream.blur_settings.anonymize_method || 'pixelate';
+                document.getElementById('edit-blur-strength').value = stream.blur_settings.blur_strength || 31;
+                document.getElementById('edit-pixelate-size').value = stream.blur_settings.pixelate_size || 10;
+                document.getElementById('edit-imgsz').value = stream.blur_settings.imgsz;
+                document.getElementById('edit-iou-threshold').value = stream.blur_settings.iou_threshold || 0.45;
+                document.getElementById('edit-box-expand').value = stream.blur_settings.box_expand_ratio || 0.1;
+                
+                updateEditMethodSettings();
+                
+                const modal = document.getElementById('settings-modal');
+                modal.style.display = 'flex';
+                modal.classList.add('active');
+            } catch (err) {
+                alert('설정을 불러올 수 없습니다: ' + err.message);
+            }
+        }
+        
+        function closeModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) {
+                modal.classList.remove('active');
+                modal.style.display = 'none';
+            }
+        }
+        
+        async function saveSettings() {
+            try {
+                const id = document.getElementById('edit-stream-id').value;
+                if (!id) {
+                    alert('스트림 ID가 없습니다.');
+                    return;
+                }
+                
+                const data = {
+                    name: document.getElementById('edit-name').value.trim(),
+                    blur_settings: {
+                        confidence_threshold: parseFloat(document.getElementById('edit-confidence').value),
+                        anonymize_method: document.getElementById('edit-anonymize-method').value,
+                        blur_strength: parseInt(document.getElementById('edit-blur-strength').value, 10) || 31,
+                        pixelate_size: parseInt(document.getElementById('edit-pixelate-size').value, 10) || 10,
+                        imgsz: parseInt(document.getElementById('edit-imgsz').value, 10),
+                        max_age: 25,
+                        smoothing: 0.5,
+                        iou_threshold: parseFloat(document.getElementById('edit-iou-threshold').value),
+                        box_expand_ratio: parseFloat(document.getElementById('edit-box-expand').value)
+                    }
+                };
+                
+                const res = await fetch(`${API_BASE}/streams/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                if (!res.ok) {
+                    let errorMessage = '설정 저장 실패';
+                    try {
+                        const error = await res.json();
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        errorMessage = `설정 저장 실패 (${res.status} ${res.statusText})`;
+                    }
+                    alert(errorMessage);
+                    return;
+                }
+                
+                closeModal();
+                loadStreams();
+            } catch (err) {
+                alert('설정 저장 중 오류가 발생했습니다: ' + err.message);
+            }
+        }
+        
+        function setCopyButtonSuccess(button, originalText) {
+            button.textContent = '완료!';
+            button.style.background = 'rgba(34,197,94,0.3)';
+            button.style.borderColor = '#22c55e';
+            button.style.color = '#22c55e';
+            
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.background = 'rgba(0,217,255,0.2)';
+                button.style.borderColor = 'rgba(0,217,255,0.3)';
+                button.style.color = '#00d9ff';
+            }, 2000);
+        }
+        
+        async function copyToClipboard(text, button) {
+            const originalText = button.textContent;
+            
+            try {
+                await navigator.clipboard.writeText(text);
+                setCopyButtonSuccess(button, originalText);
+            } catch (err) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    setCopyButtonSuccess(button, originalText);
+                } catch (e) {
+                    alert('복사 실패: ' + e.message);
+                }
+                document.body.removeChild(textarea);
+            }
+        }
+        
+        function updateMethodSettings() {
+            const method = document.getElementById('anonymize-method').value;
+            const blurGroup = document.getElementById('blur-strength-group');
+            const pixelateGroup = document.getElementById('pixelate-size-group');
+            
+            if (method === 'blur') {
+                blurGroup.style.display = 'block';
+                pixelateGroup.style.display = 'none';
+            } else if (method === 'pixelate' || method === 'mosaic') {
+                blurGroup.style.display = 'none';
+                pixelateGroup.style.display = 'block';
+            } else {
+                blurGroup.style.display = 'none';
+                pixelateGroup.style.display = 'none';
+            }
+        }
+        
+        function updateEditMethodSettings() {
+            const method = document.getElementById('edit-anonymize-method').value;
+            const blurGroup = document.getElementById('edit-blur-strength-group');
+            const pixelateGroup = document.getElementById('edit-pixelate-size-group');
+            
+            if (method === 'blur') {
+                blurGroup.style.display = 'block';
+                pixelateGroup.style.display = 'none';
+            } else if (method === 'pixelate' || method === 'mosaic') {
+                blurGroup.style.display = 'none';
+                pixelateGroup.style.display = 'block';
+            } else {
+                blurGroup.style.display = 'none';
+                pixelateGroup.style.display = 'none';
+            }
+        }
+        
+        updateMethodSettings();
+        
+        loadStreams();
+        loadStats();
+        setInterval(loadStreams, 3000);
+        setInterval(loadStats, 2000);
+    </script>
+</body>
+</html>
