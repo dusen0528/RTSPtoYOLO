@@ -4,15 +4,25 @@ RTSP 스트림에서 얼굴을 감지하고 블러 처리하여 Flashphoner로 �
 
 ## 📦 설치
 
+### 사전 요구사항
+
+- Python 3.10 이상
+- UV (Python 패키지 관리자)
+- FFmpeg
+
+**UV 및 Python 설치 방법은 [UV_SETUP.md](UV_SETUP.md)를 참고하세요.**
+
+### 의존성 설치
+
 ```bash
 # 프로젝트 루트에서
 cd yolo
 
-# uv로 의존성 설치
+# uv로 의존성 설치 (권장)
 uv sync
 
 # 또는 pip으로 설치
-pip install -e ..
+pip install -r requirements.txt  # requirements.txt가 있는 경우
 ```
 
 ## 🚀 서버 실행
