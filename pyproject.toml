@@ -27,6 +27,12 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatchling.build]
+include = ["server/**/*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["server"]
+
 [tool.uv]
 dev-dependencies = []
 

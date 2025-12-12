@@ -135,13 +135,14 @@ class StreamProcessor:
         self._min_frame_interval = 1.0 / settings.max_fps  # FPS 제한
         self._last_frame_time = 0.0
         self._last_boxes = []  # 마지막 감지 박스 (프레임 스킵 시 재사용)
+        self._last_frame = None  # 마지막 전송 프레임
         
         # 프레임 스킵 제어
         self._frame_index = 0  # 프레임 인덱스 (frame_skip_ratio 제어용)
     
     def start(self):
         """스트림 처리 시작 (STARTING 상태로 전환, 성공 후 RUNNING)"""
-        if self.status == StreamStatus.RUNNING or self.status == StreamStatus.STARTING:
+        if self.status in (StreamStatus.RUNNING, StreamStatus.STARTING, StreamStatus.ERROR):
             return
         
         self._stop_event.clear()
@@ -186,15 +187,23 @@ class StreamProcessor:
         
         # 4. 스레드 종료 대기 (타임아웃 0.5초로 단축)
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=0.5)
+            # 백오프 재시도 3회 (총 최대 1.5초)
+            for attempt in range(3):
+                self._thread.join(timeout=0.5)
+                if not self._thread.is_alive():
+                    break
+                print(f"[{self.stream_id}] ⚠️ 스레드 종료 대기 중 (재시도 {attempt + 1}/3)...")
             
-            # 스레드가 여전히 살아있으면 강제 정리
+            # 스레드가 여전히 살아있으면 상태를 ERROR로 표시하여 재시작 방지
             if self._thread.is_alive():
-                print(f"[{self.stream_id}] ⚠️ 스레드가 타임아웃 내 종료되지 않음, 강제 정리...")
+                print(f"[{self.stream_id}] ⚠️ 스레드가 종료되지 않아 강제 정리 후 ERROR 상태로 설정")
+                self.status = StreamStatus.ERROR
         
         # 5. 최종 정리 (비동기로 실행하여 빠른 반환)
         self._cleanup_fast()
-        self.status = StreamStatus.STOPPED
+        if self.status != StreamStatus.ERROR:
+            self.status = StreamStatus.STOPPED
+        self._thread = None
         print(f"[{self.stream_id}] 스트림 중지 완료")
     
     def update_settings(self, blur_settings: BlurSettings):
@@ -215,9 +224,11 @@ class StreamProcessor:
             'fps': self.fps,
             'frame_count': self.frame_count,
             'faces_detected': self.faces_detected,
+            'frames_skipped': self.frames_skipped,
             'cpu_usage': self.cpu_usage,
             'inference_time_ms': self.inference_time_ms,
             'uptime_seconds': uptime,
+            'ffmpeg_alive': self._ffmpeg_is_alive(),
         }
     
     def _process_loop(self):
@@ -339,16 +350,6 @@ class StreamProcessor:
                 self._frame_index += 1
                 should_process_frame = (self._frame_index % settings.frame_skip_ratio == 0)
                 
-                if not should_process_frame:
-                    # 프레임 스킵: 이전 박스로 블러만 적용하고 전송/인코딩 자체를 건너뜀
-                    self.frames_skipped += 1
-                    stable_boxes = self._last_boxes
-                    # 인코딩/전송도 건너뛰므로 continue
-                    # 중지 체크
-                    if self._stop_event.is_set():
-                        break
-                    continue
-                
                 # 중지 체크 (처리 전)
                 if self._stop_event.is_set():
                     break
@@ -357,10 +358,9 @@ class StreamProcessor:
                 time_since_last = current_time - self._last_frame_time
                 should_skip = settings.enable_frame_skip and time_since_last < self._min_frame_interval
                 
-                if should_skip:
-                    # 프레임 스킵: 이전 박스로 블러만 적용
+                stable_boxes = self._last_boxes
+                if should_skip or not should_process_frame:
                     self.frames_skipped += 1
-                    stable_boxes = self._last_boxes
                 else:
                     # YOLO 추론 (락으로 스레드 안전 + 타임아웃)
                     inference_start = time.time()
@@ -369,13 +369,10 @@ class StreamProcessor:
                     if not acquired:
                         # 타임아웃: 이전 박스 사용
                         print(f"[{self.stream_id}] 추론 타임아웃, 프레임 드롭")
-                        stable_boxes = self._last_boxes
                     else:
                         try:
                             # 중지 체크 (추론 전)
-                            if self._stop_event.is_set():
-                                stable_boxes = self._last_boxes
-                            else:
+                            if not self._stop_event.is_set():
                                 # person 감지 모드인 경우 classes=[0]으로 person만 감지
                                 model_kwargs = {
                                     'verbose': False,
@@ -390,16 +387,13 @@ class StreamProcessor:
                                 results = self.model(frame, **model_kwargs)
                                 
                                 # 중지 체크 (추론 후)
-                                if self._stop_event.is_set():
-                                    stable_boxes = self._last_boxes
-                                else:
+                                if not self._stop_event.is_set():
                                     inference_time = time.time() - inference_start
                                     self._inference_times.append(inference_time * 1000)
                                     
                                     # 감지된 객체 추출 (person 또는 face)
                                     detections = []
                                     h, w = frame.shape[:2]
-                                    expand_ratio = self.blur_settings.box_expand_ratio
                                     
                                     for box in results[0].boxes:
                                         # 클래스 확인 (person = 0, face는 별도 클래스)
@@ -468,6 +462,10 @@ class StreamProcessor:
                 # 블러 처리
                 for box in stable_boxes:
                     frame = self._apply_blur(frame, box)
+
+                # 추론/인코딩을 수행하지 않은 스킵 프레임도 처리 시점 기록
+                if should_skip or not should_process_frame:
+                    self._last_frame_time = current_time
                 
                 # 해상도 다운스케일 (설정된 경우)
                 if settings.output_scale != 1.0:
@@ -697,6 +695,12 @@ class StreamProcessor:
                 print(f"[{self.stream_id}] FFmpeg 에러: {error_msg[:500]}")
             return False
         return True
+
+    def _ffmpeg_is_alive(self) -> bool:
+        """FFmpeg 생존 여부 (로그/재시작 없이 확인용)"""
+        if self._ffmpeg_process is None:
+            return False
+        return self._ffmpeg_process.poll() is None
     
     def _get_ffmpeg_error(self) -> str:
         """FFmpeg stderr에서 에러 메시지 읽기"""

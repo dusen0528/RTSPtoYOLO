@@ -15,6 +15,7 @@ from .models import (
     ApiResponse, BlurSettings
 )
 from fastapi import Query
+from urllib.parse import urlparse
 from .stream_manager import manager
 from .config import settings
 
@@ -60,7 +61,7 @@ async def create_stream(data: StreamCreate):
         info = manager.create_stream(data)
         return info
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/streams", response_model=List[StreamInfo], tags=["Streams"])
@@ -82,12 +83,27 @@ async def get_output_url_by_input(
     info = manager.get_stream_by_input_url(input_url)
     
     if not info:
-        print(f"[API] ❌ 스트림을 찾을 수 없음: {input_url}", flush=True)
+        print(f"[API] ❌ 스트림 없음, 자동 생성 시도: {input_url}", flush=True)
         sys.stdout.flush()
-        raise HTTPException(
-            status_code=404, 
-            detail=f"입력 URL '{input_url}'에 해당하는 스트림을 찾을 수 없습니다"
-        )
+        try:
+            generated = _generate_output_url(input_url)
+            new_stream = StreamCreate(
+                name=_derive_name_from_input(input_url),
+                input_url=input_url.strip(),
+                output_url=generated,
+                allow_duplicate=True,
+                blur_settings=BlurSettings()
+            )
+            info = manager.create_stream(new_stream)
+            print(f"[API] ✅ 스트림 자동 생성 완료: {info.id}, output_url: {info.output_url}", flush=True)
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"[API] ❌ 자동 생성 실패: {e}", flush=True)
+            sys.stdout.flush()
+            raise HTTPException(
+                status_code=500,
+                detail=f"입력 URL '{input_url}'로 스트림을 생성할 수 없습니다: {e}"
+            )
     
     print(f"[API] ✅ 스트림 찾음: {info.id}, output_url: {info.output_url}", flush=True)
     sys.stdout.flush()
@@ -100,6 +116,42 @@ async def get_output_url_by_input(
         "name": info.name,
         "status": info.status.value
     }
+
+
+def _generate_output_url(input_url: str) -> str:
+    """입력 RTSP URL을 기반으로 블러 출력 URL 생성"""
+    parsed = urlparse(input_url.strip())
+    if not parsed.scheme.startswith("rtsp"):
+        raise ValueError("RTSP URL이 아닙니다.")
+    
+    path = parsed.path or ""
+    if not path:
+        raise ValueError("RTSP URL에 경로가 없습니다.")
+    
+    if path.endswith("/"):
+        path = path[:-1]
+    # 마지막 세그먼트에 -blur 추가
+    segments = path.split("/")
+    last = segments[-1]
+    if not last:
+        raise ValueError("RTSP URL 경로가 비어 있습니다.")
+    segments[-1] = f"{last}-blur"
+    new_path = "/".join(segments)
+    
+    port_part = f":{parsed.port}" if parsed.port else ""
+    return f"rtsp://{parsed.hostname}{port_part}{new_path}"
+
+
+def _derive_name_from_input(input_url: str) -> str:
+    """입력 URL에서 이름 생성"""
+    parsed = urlparse(input_url.strip())
+    path = parsed.path or ""
+    if path.endswith("/"):
+        path = path[:-1]
+    if not path:
+        return "auto-stream"
+    last = path.split("/")[-1]
+    return last or "auto-stream"
 
 
 @app.get("/api/streams/{stream_id}", response_model=StreamInfo, tags=["Streams"])
@@ -207,7 +259,7 @@ def get_admin_html() -> str:
 def run_server():
     """서버 실행 함수 (CLI용)"""
     uvicorn.run(
-        "yolo.server.main:app",
+        "server.main:app",
         host=settings.host,
         port=settings.port,
         reload=False,

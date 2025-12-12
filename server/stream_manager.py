@@ -60,6 +60,17 @@ class StreamManager:
         # 모델 로드 확인
         if not self.is_model_ready:
             raise RuntimeError("YOLO 모델이 로드되지 않았습니다. 서버를 재시작하세요.")
+
+        # 입력/출력 URL 중복 방지 (옵션)
+        if not data.allow_duplicate:
+            normalized_input = data.input_url.strip()
+            normalized_output = data.output_url.strip()
+            for sid, stream in self._streams.items():
+                info: StreamInfo = stream["info"]
+                if info.input_url.strip() == normalized_input:
+                    raise RuntimeError(f"동일 입력 URL 스트림이 이미 존재합니다 (id={sid})")
+                if info.output_url.strip() == normalized_output:
+                    raise RuntimeError(f"동일 출력 URL 스트림이 이미 존재합니다 (id={sid})")
         
         stream_id = str(uuid.uuid4())[:8]
         
@@ -153,9 +164,11 @@ class StreamManager:
         info.fps = stats['fps']
         info.frame_count = stats['frame_count']
         info.faces_detected = stats['faces_detected']
+        info.frames_skipped = stats['frames_skipped']
         info.cpu_usage = stats['cpu_usage']
         info.inference_time_ms = stats['inference_time_ms']
         info.error_message = processor.error_message
+        info.ffmpeg_alive = stats['ffmpeg_alive']
         
         return info
     
@@ -238,6 +251,9 @@ class StreamManager:
         
         # 스트림별 통계
         streams = []
+        total_fps = 0.0
+        total_skip_ratio = 0.0
+        counted = 0
         for sid, s in self._streams.items():
             processor: StreamProcessor = s['processor']
             stats = processor.get_stats()
@@ -248,10 +264,20 @@ class StreamManager:
                 fps=stats['fps'],
                 frame_count=stats['frame_count'],
                 faces_detected=stats['faces_detected'],
+                frames_skipped=stats['frames_skipped'],
                 cpu_usage=stats['cpu_usage'],
                 inference_time_ms=stats['inference_time_ms'],
                 uptime_seconds=stats['uptime_seconds'],
+                ffmpeg_alive=stats['ffmpeg_alive'],
             ))
+
+            skip_ratio = stats['frames_skipped'] / max(1, stats['frame_count'])
+            total_skip_ratio += skip_ratio
+            total_fps += stats['fps']
+            counted += 1
+
+        average_fps = total_fps / counted if counted else 0.0
+        average_skip_ratio = total_skip_ratio / counted if counted else 0.0
         
         return ServerStats(
             total_streams=total,
@@ -260,6 +286,9 @@ class StreamManager:
             total_memory_mb=mem_mb,
             system_cpu_percent=sys_cpu,
             system_memory_percent=sys_mem,
+            model_ready=self.is_model_ready,
+            average_fps=average_fps,
+            average_skip_ratio=average_skip_ratio,
             streams=streams,
         )
     

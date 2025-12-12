@@ -5,10 +5,13 @@ RTSP 얼굴 블러 서버 실행 스크립트
 import sys
 import os
 
-# 프로젝트 루트를 path에 추가
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 현재 디렉토리(yolo 폴더)를 path에 추가
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
-from yolo.server.main import run_server
+# server 패키지로 직접 import (yolo 폴더가 루트인 경우)
+from server.main import run_server
 
 if __name__ == "__main__":
     run_server()

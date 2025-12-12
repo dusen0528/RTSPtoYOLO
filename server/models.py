@@ -43,6 +43,7 @@ class StreamCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="스트림 이름")
     input_url: str = Field(..., description="입력 RTSP URL")
     output_url: str = Field(..., description="출력 RTSP URL (Flashphoner)")
+    allow_duplicate: bool = Field(default=True, description="동일 URL 스트림 생성 허용 여부 (기본 허용)")
     blur_settings: Optional[BlurSettings] = Field(default=None, description="블러 설정 (없으면 기본값)")
 
 
@@ -67,9 +68,11 @@ class StreamInfo(BaseModel):
     fps: float = 0.0
     frame_count: int = 0
     faces_detected: int = 0
+    frames_skipped: int = 0
     cpu_usage: float = 0.0
     inference_time_ms: float = 0.0
     error_message: Optional[str] = None
+    ffmpeg_alive: bool = False
 
 
 class StreamStats(BaseModel):
@@ -80,9 +83,11 @@ class StreamStats(BaseModel):
     fps: float
     frame_count: int
     faces_detected: int
+    frames_skipped: int
     cpu_usage: float
     inference_time_ms: float
     uptime_seconds: float
+    ffmpeg_alive: bool
 
 
 class ServerStats(BaseModel):
@@ -93,6 +98,9 @@ class ServerStats(BaseModel):
     total_memory_mb: float
     system_cpu_percent: float
     system_memory_percent: float
+    model_ready: bool
+    average_fps: float
+    average_skip_ratio: float
     streams: List[StreamStats]
 
 

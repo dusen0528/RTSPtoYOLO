@@ -463,6 +463,7 @@
                 name: document.getElementById('stream-name').value.trim(),
                 input_url: document.getElementById('input-url').value.trim(),
                 output_url: document.getElementById('output-url').value.trim(),
+                allow_duplicate: true,
                 blur_settings: {
                     confidence_threshold: parseFloat(document.getElementById('confidence').value),
                     anonymize_method: document.getElementById('anonymize-method').value,
@@ -632,13 +633,13 @@
                         const stopBtn = document.createElement('button');
                         stopBtn.className = 'btn btn-secondary';
                         stopBtn.textContent = '중지';
-                        stopBtn.onclick = () => stopStream(s.id);
+                        stopBtn.onclick = () => stopStream(s.id, stopBtn);
                         actions.appendChild(stopBtn);
                     } else {
                         const startBtn = document.createElement('button');
                         startBtn.className = 'btn btn-primary';
                         startBtn.textContent = '시작';
-                        startBtn.onclick = () => startStream(s.id);
+                        startBtn.onclick = () => startStream(s.id, startBtn);
                         actions.appendChild(startBtn);
                     }
                     
@@ -651,7 +652,7 @@
                     const deleteBtn = document.createElement('button');
                     deleteBtn.className = 'btn btn-danger';
                     deleteBtn.textContent = '삭제';
-                    deleteBtn.onclick = () => deleteStream(s.id);
+                    deleteBtn.onclick = () => deleteStream(s.id, deleteBtn);
                     actions.appendChild(deleteBtn);
                     
                     card.appendChild(streamInfo);
@@ -687,8 +688,14 @@
         }
         
         // 스트림 시작
-        async function startStream(id) {
+        async function startStream(id, button) {
             try {
+                if (button) {
+                    button.disabled = true;
+                    const prev = button.textContent;
+                    button.dataset.prevText = prev;
+                    button.textContent = '시작 중...';
+                }
                 const res = await fetch(`${API_BASE}/streams/${id}/start`, { method: 'POST' });
                 
                 if (!res.ok) {
@@ -706,12 +713,23 @@
                 loadStreams();
             } catch (err) {
                 alert('오류: ' + err.message);
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = button.dataset.prevText || '시작';
+                }
             }
         }
         
         // 스트림 중지
-        async function stopStream(id) {
+        async function stopStream(id, button) {
             try {
+                if (button) {
+                    button.disabled = true;
+                    const prev = button.textContent;
+                    button.dataset.prevText = prev;
+                    button.textContent = '중지 중...';
+                }
                 const res = await fetch(`${API_BASE}/streams/${id}/stop`, { method: 'POST' });
                 
                 if (!res.ok) {
@@ -729,14 +747,25 @@
                 loadStreams();
             } catch (err) {
                 alert('오류: ' + err.message);
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = button.dataset.prevText || '중지';
+                }
             }
         }
         
         // 스트림 삭제
-        async function deleteStream(id) {
+        async function deleteStream(id, button) {
             if (!confirm('정말 삭제하시겠습니까?')) return;
             
             try {
+                if (button) {
+                    button.disabled = true;
+                    const prev = button.textContent;
+                    button.dataset.prevText = prev;
+                    button.textContent = '삭제 중...';
+                }
                 const res = await fetch(`${API_BASE}/streams/${id}`, { method: 'DELETE' });
                 
                 if (!res.ok) {
@@ -754,6 +783,11 @@
                 loadStreams();
             } catch (err) {
                 alert('오류: ' + err.message);
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = button.dataset.prevText || '삭제';
+                }
             }
         }
         

@@ -2,43 +2,28 @@
 
 RTSP 스트림에서 얼굴을 감지하고 블러 처리하여 Flashphoner로 재전송하는 FastAPI 서버입니다.
 
-## 📦 설치
+## 📦 UV 설치
 
-### 사전 요구사항
+### Windows
 
-- Python 3.10 이상
-- UV (Python 패키지 관리자)
-- FFmpeg
-
-**UV 및 Python 설치 방법은 [UV_SETUP.md](UV_SETUP.md)를 참고하세요.**
-
-### 의존성 설치
-
-```bash
-# 프로젝트 루트에서
-cd yolo
-
-# uv로 의존성 설치 (권장)
-uv sync
-
-# 또는 pip으로 설치
-pip install -r requirements.txt  # requirements.txt가 있는 경우
+#### 방법 1: PowerShell (권장)
+```powershell
+# PowerShell에서 실행
+irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-## 🚀 서버 실행
 
-```bash
-# 방법 1: Python 직접 실행
-cd yolo
-python run_server.py
+## 파이썬 설치
+uv python install 3.11 
 
-# 방법 2: uvicorn으로 실행
-cd yolo
-uvicorn server.main:app --host 0.0.0.0 --port 8000
+## 의존성 설치
+uv sync 
 
-# 방법 3: 프로젝트 루트에서
-python -m yolo.server.main
-```
+## 프로젝트 루트에서 가상환경 진입
+source .venv\Scripts\activate
+
+## 서버 실행 
+uv run python run_server.py
 
 서버가 시작되면 http://localhost:8000 에서 관리 페이지에 접속할 수 있습니다.
 
