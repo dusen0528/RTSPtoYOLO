@@ -5,6 +5,7 @@ import uuid
 import psutil
 import threading
 import sys
+from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
 from ultralytics import YOLO
@@ -51,9 +52,24 @@ class StreamManager:
     def initialize_model(self):
         """YOLO 모델 초기화 (서버 시작 시 한 번만)"""
         if self._model is None:
-            print(f"YOLO 모델 로드 중: {settings.model_path}")
-            self._model = YOLO(settings.model_path)
-            print("YOLO 모델 로드 완료!")
+            use_ov = getattr(settings, "use_openvino", False)
+            model_path = Path(settings.model_path)
+            ov_path = None
+            if use_ov and model_path.suffix == ".pt":
+                candidate = model_path.with_name(f"{model_path.stem}_openvino_model")
+                if candidate.exists():
+                    ov_path = candidate
+            try:
+                if ov_path:
+                    print(f"YOLO(OpenVINO) 로드: {ov_path}")
+                    self._model = YOLO(str(ov_path), task="detect")
+                else:
+                    print(f"YOLO 로드: {settings.model_path}")
+                    self._model = YOLO(settings.model_path)
+                print("YOLO 로드 완료")
+            except Exception as e:
+                print(f"YOLO 로드 오류, PyTorch로 폴백: {e}")
+                self._model = YOLO(settings.model_path)
     
     def create_stream(self, data: StreamCreate) -> StreamInfo:
         """새 스트림 생성"""
@@ -193,22 +209,22 @@ class StreamManager:
             
             # 정확한 매칭
             if stored_url == normalized_input:
-                print(f"[DEBUG] ✅ 매칭 성공! 스트림 ID: {stream_id}", flush=True)
+                print(f"[DEBUG] 매칭 성공! 스트림 ID: {stream_id}", flush=True)
                 sys.stdout.flush()
                 return self.get_stream(stream_id)
             else:
                 # 차이점 출력
                 if len(stored_url) != len(normalized_input):
-                    print(f"[DEBUG] ❌ 길이 불일치: 저장={len(stored_url)}, 요청={len(normalized_input)}", flush=True)
+                    print(f"[DEBUG] 길이 불일치: 저장={len(stored_url)}, 요청={len(normalized_input)}", flush=True)
                 else:
                     # 첫 번째 다른 문자 찾기
                     for i, (s, n) in enumerate(zip(stored_url, normalized_input)):
                         if s != n:
-                            print(f"[DEBUG] ❌ 위치 {i}에서 불일치: 저장='{s}'({ord(s)}), 요청='{n}'({ord(n)})", flush=True)
+                            print(f"[DEBUG] 위치 {i}에서 불일치: 저장='{s}'({ord(s)}), 요청='{n}'({ord(n)})", flush=True)
                             break
             sys.stdout.flush()
         
-        print(f"[DEBUG] ❌ 매칭 실패: 해당 input_url을 가진 스트림이 없습니다", flush=True)
+        print(f"[DEBUG] 매칭 실패: 해당 input_url을 가진 스트림이 없습니다", flush=True)
         sys.stdout.flush()
         return None
     
@@ -227,8 +243,13 @@ class StreamManager:
         
         # 블러 설정 업데이트
         if data.blur_settings:
-            info.blur_settings = data.blur_settings
-            processor.update_settings(data.blur_settings)
+            existing_dict = info.blur_settings.model_dump()
+            new_dict = data.blur_settings.model_dump(exclude_unset=True)
+            existing_dict.update(new_dict)
+            merged_settings = BlurSettings(**existing_dict)
+            
+            info.blur_settings = merged_settings
+            processor.update_settings(merged_settings)
         
         return info
     
@@ -300,4 +321,3 @@ class StreamManager:
 
 # 전역 매니저 인스턴스
 manager = StreamManager()
-

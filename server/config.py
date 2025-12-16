@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     output_scale: float = 1.0  # 출력 해상도 배율 (0.5 = 절반)
     inference_timeout: float = 5.0  # 추론 타임아웃 (초)
     max_concurrent_streams: int = 10  # 최대 동시 스트림 수
-    frame_skip_ratio: int = 2  # N프레임마다 1번만 추론 (2 = 2프레임마다 1번)
+    frame_skip_ratio: int = 2  # 레거시(사용 안 함): 과거 스킵 정책 호환용
+    skip_interval: int = 3  # N프레임마다 1번만 추론 (3 = 3프레임마다 1번)
     
     class Config:
         env_file = ".env"
@@ -50,4 +51,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

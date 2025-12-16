@@ -56,3 +56,16 @@ outputs/
 # uv
 uv.lock
 
+# Caches / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.cache/
+
+# Local tooling
+.python-version
+.cursor/
+

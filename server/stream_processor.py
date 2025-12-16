@@ -130,6 +130,7 @@ class StreamProcessor:
         # FPS 계산용
         self._fps_times = deque(maxlen=30)
         self._inference_times = deque(maxlen=30)
+        self._last_frame_received_time = None  # 마지막 프레임 수신 시간 (중단 감지용)
         
         # 부하 제어용
         self._min_frame_interval = 1.0 / settings.max_fps  # FPS 제한
@@ -139,19 +140,48 @@ class StreamProcessor:
         
         # 프레임 스킵 제어
         self._frame_index = 0  # 프레임 인덱스 (frame_skip_ratio 제어용)
+        self.frame_count = 0  # 최적화: 프레임 카운터 (skip_interval 제어용)
+        self.skip_interval = getattr(settings, 'skip_interval', 3)  # 최적화: 3프레임마다 1번만 추론
+        
+        # 입력 FPS 저장 (동적 FPS 설정용)
+        self._input_fps = 25  # 기본값
     
     def start(self):
         """스트림 처리 시작 (STARTING 상태로 전환, 성공 후 RUNNING)"""
-        if self.status in (StreamStatus.RUNNING, StreamStatus.STARTING, StreamStatus.ERROR):
+        # RUNNING이나 STARTING 상태면 재시작 불필요
+        if self.status in (StreamStatus.RUNNING, StreamStatus.STARTING):
             return
         
+        # ERROR 상태에서 재시작: 기존 리소스 정리 후 재시작
+        if self.status == StreamStatus.ERROR:
+            print(f"[{self.stream_id}] ERROR 상태에서 재시작 시도...")
+            # 기존 스레드가 있으면 정리
+            if self._thread and self._thread.is_alive():
+                self._stop_event.set()
+                # 리소스 강제 정리
+                self._cleanup_fast()
+                # 스레드 종료 대기 (짧은 타임아웃)
+                self._thread.join(timeout=1.0)
+                if self._thread.is_alive():
+                    print(f"[{self.stream_id}] 경고: 기존 스레드가 종료되지 않았지만 재시작 진행")
+            self._thread = None
+        
+        # 리소스 초기화
         self._stop_event.clear()
         self.error_message = None
         self.status = StreamStatus.STARTING  # 시작 중 상태
         self.started_at = datetime.now()
         
+        # 트래커 초기화 (재시작 시)
+        self._tracker.reset()
+        self.frame_count = 0
+        self._frame_index = 0
+        self._last_boxes = []
+        
+        # 새 스레드 시작
         self._thread = threading.Thread(target=self._process_loop, daemon=True)
         self._thread.start()
+        print(f"[{self.stream_id}] 재시작 요청 완료 (상태: {self.status.value})")
     
     def stop(self):
         """스트림 처리 중지 (빠른 종료 + 강제 정리)"""
@@ -192,11 +222,11 @@ class StreamProcessor:
                 self._thread.join(timeout=0.5)
                 if not self._thread.is_alive():
                     break
-                print(f"[{self.stream_id}] ⚠️ 스레드 종료 대기 중 (재시도 {attempt + 1}/3)...")
+                print(f"[{self.stream_id}] 경고: 스레드 종료 대기 중 (재시도 {attempt + 1}/3)...")
             
             # 스레드가 여전히 살아있으면 상태를 ERROR로 표시하여 재시작 방지
             if self._thread.is_alive():
-                print(f"[{self.stream_id}] ⚠️ 스레드가 종료되지 않아 강제 정리 후 ERROR 상태로 설정")
+                print(f"[{self.stream_id}] 경고: 스레드가 종료되지 않아 강제 정리 후 ERROR 상태로 설정")
                 self.status = StreamStatus.ERROR
         
         # 5. 최종 정리 (비동기로 실행하여 빠른 반환)
@@ -259,11 +289,25 @@ class StreamProcessor:
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             
             if not self._cap.isOpened():
-                raise Exception(f"입력 스트림 연결 실패: {self.input_url}")
+                # 구체적인 에러 메시지 생성
+                error_msg = f"입력 RTSP 스트림 연결 실패: {self.input_url}"
+                error_msg += "\n가능한 원인:"
+                error_msg += "\n  - RTSP 서버가 다운되었거나 접근 불가"
+                error_msg += "\n  - URL이 잘못되었거나 스트림이 존재하지 않음"
+                error_msg += "\n  - 네트워크 연결 문제"
+                error_msg += "\n  - 인증 정보가 필요하거나 권한 없음"
+                raise Exception(error_msg)
             
             # 프레임 정보 가져오기
             width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            # 입력 FPS 동적 추출
+            input_fps = self._cap.get(cv2.CAP_PROP_FPS)
+            if input_fps <= 0 or input_fps > 60:
+                input_fps = 25  # 기본값
+            fps = round(input_fps)
+            self._input_fps = fps  # 인스턴스 변수에 저장
             
             if width == 0 or height == 0:
                 width, height = 1920, 1080  # 기본값
@@ -272,8 +316,8 @@ class StreamProcessor:
             out_width = int(width * settings.output_scale)
             out_height = int(height * settings.output_scale)
             
-            # FFmpeg 출력 프로세스 시작
-            self._start_ffmpeg(out_width, out_height)
+            # FFmpeg 출력 프로세스 시작 (FPS 전달)
+            self._start_ffmpeg(out_width, out_height, fps)
             
             # FFmpeg 시작 확인 (조금 더 기다려서 연결 시도 확인)
             time.sleep(1.0)  # 0.5초 → 1초로 증가 (연결 시도 시간 확보)
@@ -281,13 +325,13 @@ class StreamProcessor:
                 error_msg = self._get_ffmpeg_error()
                 # 에러 메시지가 있으면 상세 출력
                 if error_msg:
-                    print(f"[{self.stream_id}] ❌ FFmpeg 연결 실패 상세:")
+                    print(f"[{self.stream_id}] FFmpeg 연결 실패 상세:")
                     for line in error_msg.split('\n')[:10]:  # 최대 10줄만
                         if line.strip():
                             print(f"[{self.stream_id}]    {line}")
                 raise Exception(f"FFmpeg 시작 실패: {self.output_url}. {error_msg if error_msg else '에러 메시지 없음'}")
             else:
-                print(f"[{self.stream_id}] ✅ FFmpeg 연결 성공: {self.output_url}")
+                print(f"[{self.stream_id}] FFmpeg 연결 성공: {self.output_url}")
             
             process = psutil.Process()
             reconnect_count = 0
@@ -316,29 +360,71 @@ class StreamProcessor:
                         break
                     
                     reconnect_count += 1
-                    if reconnect_count > max_reconnect:
-                        raise Exception(f"RTSP 재연결 실패 (시도 {max_reconnect}회)")
                     
-                    print(f"[{self.stream_id}] 재연결 시도 {reconnect_count}/{max_reconnect}...")
+                    # 재연결 시도 전에 에러 원인 파악
+                    error_details = []
+                    if self._cap:
+                        # VideoCapture 상태 확인
+                        if not self._cap.isOpened():
+                            error_details.append("VideoCapture 연결 끊김")
+                        # 프레임 정보 확인
+                        width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) if self._cap else 0
+                        if width == 0:
+                            error_details.append("스트림 해상도 정보 없음")
+                    
+                    if reconnect_count > max_reconnect:
+                        # 구체적인 에러 메시지 생성
+                        error_parts = [f"RTSP 재연결 실패 (시도 {max_reconnect}회)"]
+                        if error_details:
+                            error_parts.append(f"원인: {', '.join(error_details)}")
+                        error_parts.append(f"입력 URL: {self.input_url}")
+                        error_msg = ". ".join(error_parts)
+                        raise Exception(error_msg)
+                    
+                    # 지수 백오프: 재시도 간격 점진적 증가 (1초, 2초, 3초, 4초, 5초)
+                    retry_delay = min(reconnect_count, 5)
+                    print(f"[{self.stream_id}] 프레임 수신 실패, 재연결 시도 {reconnect_count}/{max_reconnect} (대기 {retry_delay}초)...")
+                    if error_details:
+                        print(f"[{self.stream_id}]    상세: {', '.join(error_details)}")
                     
                     # 중지 체크 (재연결 대기 중)
-                    if self._stop_event.wait(timeout=1):
+                    if self._stop_event.wait(timeout=retry_delay):
                         break
                     
                     # 중지 체크 (재연결 전)
                     if self._stop_event.is_set():
                         break
                     
-                    # 재연결 시에도 RTSP 저지연 옵션 적용 (os.environ은 이미 설정됨)
+                    # 재연결 시도
                     try:
-                        self._cap.release()
+                        if self._cap:
+                            self._cap.release()
                     except:
                         pass
-                    self._cap = cv2.VideoCapture(self.input_url, cv2.CAP_FFMPEG)
-                    self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    
+                    # 재연결 시에도 RTSP 저지연 옵션 적용
+                    try:
+                        self._cap = cv2.VideoCapture(self.input_url, cv2.CAP_FFMPEG)
+                        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        
+                        # 재연결 확인
+                        if not self._cap.isOpened():
+                            print(f"[{self.stream_id}] 재연결 실패: VideoCapture 열기 실패")
+                            continue
+                        
+                        # 재연결 성공 확인 (짧은 대기 후 프레임 읽기 시도)
+                        time.sleep(0.5)
+                        test_ret, _ = self._cap.read()
+                        if test_ret:
+                            print(f"[{self.stream_id}] 재연결 성공!")
+                            reconnect_count = 0  # 성공 시 카운터 리셋
+                    except Exception as e:
+                        print(f"[{self.stream_id}] 재연결 중 오류: {e}")
+                    
                     continue
                 
                 reconnect_count = 0  # 성공 시 카운터 리셋
+                self._last_frame_received_time = current_time  # 프레임 수신 시간 기록
                 
                 # 첫 프레임 성공 → RUNNING 상태로 전환
                 if not first_frame_success:
@@ -346,22 +432,31 @@ class StreamProcessor:
                     self.status = StreamStatus.RUNNING
                     print(f"[{self.stream_id}] 스트림 시작 성공! ({width}x{height})")
                 
-                # frame_skip_ratio를 사용하여 프레임 드롭
-                self._frame_index += 1
-                should_process_frame = (self._frame_index % settings.frame_skip_ratio == 0)
-                
                 # 중지 체크 (처리 전)
                 if self._stop_event.is_set():
                     break
                 
                 # FPS 제한: 너무 빠르면 프레임 스킵
                 time_since_last = current_time - self._last_frame_time
-                should_skip = settings.enable_frame_skip and time_since_last < self._min_frame_interval
+                should_skip_fps = settings.enable_frame_skip and time_since_last < self._min_frame_interval
                 
+                # frame_skip_ratio를 사용하여 프레임 드롭 (레거시)
+                self._frame_index += 1
+                should_process_frame = (self._frame_index % settings.frame_skip_ratio == 0)
+                
+                # 최적화: 프레임 스킵 (3프레임마다 1번만 추론)
+                self.frame_count += 1
+                should_run_inference = (self.frame_count % self.skip_interval == 0)
+                
+                # 기본값: 이전 프레임의 박스 사용
                 stable_boxes = self._last_boxes
-                if should_skip or not should_process_frame:
+                
+                # FPS 제한 또는 레거시 프레임 스킵 조건
+                if should_skip_fps or not should_process_frame:
                     self.frames_skipped += 1
-                else:
+                # 최적화: 설정한 간격마다만 YOLO 추론 실행
+                elif should_run_inference:
+                    # 최적화: 설정한 간격마다만 YOLO 추론 실행
                     # YOLO 추론 (락으로 스레드 안전 + 타임아웃)
                     inference_start = time.time()
                     
@@ -374,9 +469,11 @@ class StreamProcessor:
                             # 중지 체크 (추론 전)
                             if not self._stop_event.is_set():
                                 # person 감지 모드인 경우 classes=[0]으로 person만 감지
+                                # imgsz 방어 코드: 속성이 없으면 기본값 사용
+                                imgsz = getattr(self.blur_settings, 'imgsz', 320)
                                 model_kwargs = {
                                     'verbose': False,
-                                    'imgsz': self.blur_settings.imgsz,
+                                    'imgsz': imgsz,
                                     'conf': self.blur_settings.confidence_threshold,
                                     'iou': self.blur_settings.iou_threshold
                                 }
@@ -448,7 +545,7 @@ class StreamProcessor:
                                     
                                     # 트래커로 안정화
                                     stable_boxes = self._tracker.update(detections)
-                                    self._last_boxes = stable_boxes  # 다음 스킵용 저장
+                                    self._last_boxes = stable_boxes  # 최적화: 다음 스킵 프레임에서 재사용
                                     self._last_frame_time = current_time
                         finally:
                             self.model_lock.release()
@@ -456,6 +553,9 @@ class StreamProcessor:
                         # 중지 체크 (락 해제 후)
                         if self._stop_event.is_set():
                             break
+                else:
+                    # 최적화: 추론 안 하는 프레임은 이전 좌표(last_boxes)를 그대로 사용
+                    self.frames_skipped += 1
                 
                 self.faces_detected = len(stable_boxes)
                 
@@ -464,11 +564,17 @@ class StreamProcessor:
                     frame = self._apply_blur(frame, box)
 
                 # 추론/인코딩을 수행하지 않은 스킵 프레임도 처리 시점 기록
-                if should_skip or not should_process_frame:
+                if should_skip_fps or not should_process_frame:
                     self._last_frame_time = current_time
                 
                 # 해상도 다운스케일 (설정된 경우)
                 if settings.output_scale != 1.0:
+                    frame = cv2.resize(frame, (out_width, out_height), interpolation=cv2.INTER_LINEAR)
+                
+                # 프레임 크기 검증 (FFmpeg 명령어와 일치해야 함)
+                h, w = frame.shape[:2]
+                if h != out_height or w != out_width:
+                    # 크기가 맞지 않으면 리사이즈
                     frame = cv2.resize(frame, (out_width, out_height), interpolation=cv2.INTER_LINEAR)
                 
                 # 중지 체크
@@ -480,9 +586,23 @@ class StreamProcessor:
                     if not self._stop_event.is_set():
                         error_msg = self._get_ffmpeg_error()
                         if error_msg:
-                            print(f"[{self.stream_id}] FFmpeg 에러: {error_msg[:300]}")
-                        print(f"[{self.stream_id}] FFmpeg 종료 감지, 재시작...")
-                        self._restart_ffmpeg(out_width, out_height)
+                            # FFmpeg 에러 분석
+                            error_lower = error_msg.lower()
+                            if "connection refused" in error_lower or "404" in error_msg:
+                                print(f"[{self.stream_id}] FFmpeg 연결 실패: 출력 RTSP 서버에 연결할 수 없음")
+                                print(f"[{self.stream_id}]    URL: {self.output_url}")
+                            elif "timeout" in error_lower:
+                                print(f"[{self.stream_id}] FFmpeg 타임아웃: 출력 서버 응답 없음")
+                            elif "permission denied" in error_lower or "forbidden" in error_lower:
+                                print(f"[{self.stream_id}] FFmpeg 권한 오류: 출력 서버 접근 거부")
+                            else:
+                                print(f"[{self.stream_id}] FFmpeg 에러: {error_msg[:300]}")
+                        print(f"[{self.stream_id}] FFmpeg 재시작 시도...")
+                        try:
+                            self._restart_ffmpeg(out_width, out_height, self._input_fps)
+                            print(f"[{self.stream_id}] FFmpeg 재시작 완료")
+                        except Exception as e:
+                            print(f"[{self.stream_id}] FFmpeg 재시작 실패: {e}")
                 
                 # 중지 체크
                 if self._stop_event.is_set():
@@ -491,10 +611,20 @@ class StreamProcessor:
                 if self._ffmpeg_process and self._ffmpeg_process.poll() is None:
                     try:
                         if not self._stop_event.is_set():
-                            self._ffmpeg_process.stdin.write(frame.tobytes())
+                            # 프레임 검증
+                            if frame is None or frame.size == 0:
+                                continue
+                            
+                            frame_bytes = frame.tobytes()
+                            expected_size = out_width * out_height * 3  # BGR24 = 3 bytes per pixel
+                            if len(frame_bytes) != expected_size:
+                                continue
+                            
+                            self._ffmpeg_process.stdin.write(frame_bytes)
+                            self._ffmpeg_process.stdin.flush()  # 버퍼 플러시 추가
                     except (BrokenPipeError, OSError):
                         if not self._stop_event.is_set():
-                            self._restart_ffmpeg(out_width, out_height)
+                            self._restart_ffmpeg(out_width, out_height, self._input_fps)
                 
                 # 통계 업데이트
                 self.frame_count += 1
@@ -508,6 +638,24 @@ class StreamProcessor:
                 if self._inference_times:
                     self.inference_time_ms = sum(self._inference_times) / len(self._inference_times)
                 
+                # 프레임 수신 중단 감지 (5초 이상 프레임 없으면 경고)
+                if self._last_frame_received_time and self.status == StreamStatus.RUNNING:
+                    time_since_last_frame = current_time - self._last_frame_received_time
+                    if time_since_last_frame > 5.0:
+                        print(f"[{self.stream_id}] 프레임 수신 중단 감지 ({time_since_last_frame:.1f}초), 재연결 시도...")
+                        # VideoCapture 재연결 시도
+                        try:
+                            if self._cap:
+                                self._cap.release()
+                            self._cap = cv2.VideoCapture(self.input_url, cv2.CAP_FFMPEG)
+                            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                            if not self._cap.isOpened():
+                                print(f"[{self.stream_id}] 재연결 실패")
+                            else:
+                                self._last_frame_received_time = current_time  # 재연결 성공 시 시간 갱신
+                        except Exception as e:
+                            print(f"[{self.stream_id}] 재연결 중 오류: {e}")
+                
                 # CPU 사용률 (30프레임마다, 논블로킹)
                 if self.frame_count % 30 == 0:
                     try:
@@ -517,8 +665,19 @@ class StreamProcessor:
         
         except Exception as e:
             self.status = StreamStatus.ERROR
-            self.error_message = str(e)
-            print(f"[{self.stream_id}] 에러: {e}")
+            error_str = str(e)
+            self.error_message = error_str
+            
+            # 에러 타입별 상세 로깅
+            error_lower = error_str.lower()
+            if "rtsp" in error_lower or "재연결" in error_str:
+                print(f"[{self.stream_id}] RTSP 연결 에러: {error_str}")
+            elif "ffmpeg" in error_lower:
+                print(f"[{self.stream_id}] FFmpeg 에러: {error_str}")
+            elif "모델" in error_str or "yolo" in error_lower:
+                print(f"[{self.stream_id}] 모델 에러: {error_str}")
+            else:
+                print(f"[{self.stream_id}] 에러: {error_str}")
         finally:
             self._cleanup()
             # 성공 못하고 종료되면 ERROR 상태
@@ -550,7 +709,7 @@ class StreamProcessor:
             processed = cv2.GaussianBlur(face_region, (blur_strength, blur_strength), 0)
             
         elif method == "pixelate":
-            # 픽셀화 (빠름, 효율적) ⚡
+            # 픽셀화 (빠름, 효율적)
             pixel_size = self.blur_settings.pixelate_size
             small_w = max(1, face_w // pixel_size)
             small_h = max(1, face_h // pixel_size)
@@ -560,13 +719,13 @@ class StreamProcessor:
             processed = cv2.resize(small, (face_w, face_h), interpolation=cv2.INTER_NEAREST)
             
         elif method == "mosaic":
-            # 모자이크 (픽셀화와 유사, 빠름) ⚡
-            pixel_size = self.blur_settings.pixelate_size
-            small_w = max(1, face_w // pixel_size)
-            small_h = max(1, face_h // pixel_size)
-            # 작게 축소
-            small = cv2.resize(face_region, (small_w, small_h), interpolation=cv2.INTER_AREA)
-            # 원래 크기로 확대
+            # 최적화: 모자이크 (ratio=0.05로 축소 후 확대, 매우 빠름)
+            ratio = 0.05  # 1/20로 축소 (정보 날리기)
+            small_w = max(1, int(face_w * ratio))
+            small_h = max(1, int(face_h * ratio))
+            # 아주 작게 축소 (예: 100x100 -> 5x5)
+            small = cv2.resize(face_region, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+            # 원래 크기로 다시 확대 (모자이크 효과, 픽셀이 깨져 보임)
             processed = cv2.resize(small, (face_w, face_h), interpolation=cv2.INTER_NEAREST)
             
         elif method == "black":
@@ -590,60 +749,58 @@ class StreamProcessor:
         frame[y1:y2, x1:x2] = processed
         return frame
     
-    def _start_ffmpeg(self, width: int, height: int):
-        """FFmpeg 출력 시작 (지연 최소화 + 화질 개선 최적화)"""
+    def _start_ffmpeg(self, width: int, height: int, fps: int):
+        """FFmpeg 출력 시작 (지연 누적 방지 + 동적 FPS 최적화)"""
         # 인코딩 설정: CRF 기반 가변 비트레이트 (화질 우선) 또는 고정 비트레이트
         use_crf = settings.output_crf is not None and settings.output_crf > 0
+        
+        # GOP 크기 = FPS (1초 단위)
+        gop_size = fps
         
         cmd = [
             settings.ffmpeg_path,
             '-y',
+            # --- 입력 옵션 (-i 앞) ---
+            '-fflags', 'nobuffer',  # 입력 버퍼 최소화
+            '-use_wallclock_as_timestamps', '1',  # ⭐ 지연 누적 방지 핵심
             '-f', 'rawvideo',
             '-vcodec', 'rawvideo',
             '-pix_fmt', 'bgr24',
             '-s', f'{width}x{height}',
-            '-r', str(settings.output_fps),
-            '-i', '-',
+            '-r', str(fps),  # 입력 FPS (참고용, 벽시계와 함께 사용)
+            '-i', '-',  # 파이프 입력
+            # --- 출력 옵션 (-i 뒤) ---
             '-c:v', settings.output_codec,  # libx264 또는 하드웨어 인코더
             '-preset', settings.output_preset,  # veryfast (화질과 속도 균형)
             '-tune', 'zerolatency',  # 지연 최소화
+            '-r', str(fps),  # 출력 FPS 고정 (RTSP 플레이어를 위한 일정한 속도)
         ]
         
         # 비트레이트 또는 CRF 설정
         if use_crf:
             cmd.extend(['-crf', str(settings.output_crf)])  # 가변 비트레이트 (화질 우선)
         else:
-            # 비트레이트 파싱 (예: "4000k" -> 4000, "6M" -> 6000)
-            bitrate_str = settings.output_bitrate.upper()
-            if bitrate_str.endswith('K'):
-                bitrate_val = int(bitrate_str[:-1])
-            elif bitrate_str.endswith('M'):
-                bitrate_val = int(bitrate_str[:-1]) * 1000
-            else:
-                bitrate_val = int(bitrate_str)
-            
             cmd.extend([
                 '-b:v', settings.output_bitrate,
                 '-maxrate', settings.output_bitrate,
-                '-bufsize', f'{bitrate_val * 2}k',  # 버퍼 크기 = 비트레이트 * 2
+                '-bufsize', '2000k',  # 0.5초 버퍼 (8000k → 2000k로 고정)
             ])
         
         cmd.extend([
             '-pix_fmt', 'yuv420p',
-            '-g', str(settings.output_fps),  # GOP 크기 = fps (키프레임 간격)
-            '-x264-params', f'keyint={settings.output_fps}:min-keyint={settings.output_fps}:scenecut=0',  # 키프레임 최적화
-            '-fflags', 'nobuffer',  # 입력 버퍼 최소화
+            '-g', str(gop_size),  # 1초 GOP (빠른 복구)
+            '-x264-params', f'keyint={gop_size}:min-keyint={gop_size}:scenecut=0',  # 키프레임 최적화
             '-flags', 'low_delay',  # 낮은 지연 플래그
             '-strict', 'experimental',
             '-f', 'rtsp',
-            '-rtsp_transport', 'tcp',
+            '-rtsp_transport', 'tcp',  # RTSP 전송 방식: TCP
             '-rtsp_flags', 'prefer_tcp',  # TCP 우선 사용
             '-muxdelay', '0',  # 멀티플렉서 지연 제거
             self.output_url
         ])
         
         # 연결 시도 로그
-        print(f"[{self.stream_id}] 🔗 Flashphoner 연결 시도: {self.output_url}")
+        print(f"[{self.stream_id}] Flashphoner 연결 시도: {self.output_url} (FPS: {fps}, GOP: {gop_size})")
         
         # FFmpeg 실행 (에러 메시지 확인을 위해 stderr를 PIPE로 설정)
         self._ffmpeg_process = subprocess.Popen(
@@ -660,6 +817,18 @@ class StreamProcessor:
         def read_stderr():
             try:
                 if self._ffmpeg_process and self._ffmpeg_process.stderr:
+                    # H.264 디코딩 경고 필터링 (무시할 패턴)
+                    ignore_patterns = [
+                        'non-existing pps',
+                        'decode_slice_header error',
+                        'no frame!',
+                        'out of range intra chroma pred mode',
+                        'error while decoding mb',
+                        'p sub_mb_type',
+                        'top block unavailable',
+                        '[h264 @',  # H.264 디코더 경고 전체
+                    ]
+                    
                     while True:
                         line = self._ffmpeg_process.stderr.readline()
                         if not line:
@@ -667,14 +836,21 @@ class StreamProcessor:
                         line_str = line.decode('utf-8', errors='ignore').strip()
                         if line_str:
                             self._ffmpeg_stderr += line_str + "\n"
-                            # 모든 RTSP 관련 메시지 출력 (디버깅용)
                             line_lower = line_str.lower()
-                            if 'rtsp' in line_lower or 'connection' in line_lower or 'streaming' in line_lower:
-                                print(f"[{self.stream_id}] 📡 FFmpeg RTSP: {line_str}")
                             
-                            # 에러 키워드가 있으면 즉시 출력
+                            # H.264 디코딩 경고는 무시 (스트림은 정상 작동)
+                            if any(pattern in line_lower for pattern in ignore_patterns):
+                                continue
+                            
+                            # RTSP 관련 메시지 출력 (디버깅용, 중요한 것만)
+                            if 'rtsp' in line_lower and ('output' in line_lower or 'connected' in line_lower):
+                                print(f"[{self.stream_id}] FFmpeg RTSP: {line_str}")
+                            
+                            # 실제 에러 키워드가 있으면 출력
                             if any(keyword in line_lower for keyword in ['error', 'failed', 'connection refused', 'timeout', 'unable', 'denied', 'forbidden', 'connection reset', 'cannot', 'unable to']):
-                                print(f"[{self.stream_id}] ⚠️ FFmpeg 에러: {line_str}")
+                                # H.264 경고가 아닌 실제 에러만
+                                if not any(pattern in line_lower for pattern in ignore_patterns):
+                                    print(f"[{self.stream_id}] FFmpeg 에러: {line_str}")
             except Exception:
                 pass
         
@@ -729,7 +905,7 @@ class StreamProcessor:
         # Windows 또는 select 실패 시: 이미 읽은 내용이 있으면 반환
         return self._ffmpeg_stderr or ""
     
-    def _restart_ffmpeg(self, width: int, height: int):
+    def _restart_ffmpeg(self, width: int, height: int, fps: int):
         """FFmpeg 재시작 (빠른 종료)"""
         if self._ffmpeg_process:
             try:
@@ -743,7 +919,7 @@ class StreamProcessor:
                 self._ffmpeg_process.kill()
             except:
                 pass
-        self._start_ffmpeg(width, height)
+        self._start_ffmpeg(width, height, fps)
         print(f"[{self.stream_id}] FFmpeg 재시작됨")
     
     def _cleanup_fast(self):

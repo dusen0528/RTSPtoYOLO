@@ -291,8 +291,8 @@
                     <div class="form-group">
                         <label>익명화 방법</label>
                         <select id="anonymize-method" onchange="updateMethodSettings()">
-                            <option value="pixelate" selected>픽셀화 (빠름 ⚡)</option>
-                            <option value="mosaic">모자이크 (빠름 ⚡)</option>
+                            <option value="pixelate" selected>픽셀화 (빠름)</option>
+                            <option value="mosaic">모자이크 (빠름)</option>
                             <option value="blur">블러 (느림, 부드러움)</option>
                             <option value="black">검은 박스 (가장 빠름)</option>
                             <option value="solid">단색 채우기 (빠름)</option>
@@ -313,7 +313,7 @@
                         <select id="imgsz">
                             <option value="320" selected>320 (경량, 빠름)</option>
                             <option value="480">480 (권장, 균형)</option>
-                            <option value="640">640 (정확, 느림 ⚠️)</option>
+                            <option value="640">640 (정확, 느림)</option>
                         </select>
                         <small style="color: #71717a; font-size: 0.8rem;">640은 320보다 4배 느립니다</small>
                     </div>
@@ -345,7 +345,7 @@
     <!-- 설정 수정 모달 -->
     <div class="modal" id="settings-modal" onclick="if(event.target === this) closeModal()">
         <div class="modal-content" onclick="event.stopPropagation()">
-            <div class="modal-title">⚙️ 스트림 설정 수정</div>
+            <div class="modal-title">스트림 설정 수정</div>
             <input type="hidden" id="edit-stream-id">
             <div class="form-group">
                 <label>스트림 이름</label>
@@ -358,8 +358,8 @@
             <div class="form-group">
                 <label>익명화 방법</label>
                 <select id="edit-anonymize-method" onchange="updateEditMethodSettings()">
-                    <option value="pixelate">픽셀화 (빠름 ⚡)</option>
-                    <option value="mosaic">모자이크 (빠름 ⚡)</option>
+                    <option value="pixelate">픽셀화 (빠름)</option>
+                    <option value="mosaic">모자이크 (빠름)</option>
                     <option value="blur">블러 (느림)</option>
                     <option value="black">검은 박스</option>
                     <option value="solid">단색 채우기</option>

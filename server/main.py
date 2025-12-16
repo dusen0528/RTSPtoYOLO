@@ -24,14 +24,14 @@ from .config import settings
 async def lifespan(app: FastAPI):
     """서버 시작/종료 시 처리"""
     # 시작 시
-    print("🚀 서버 시작 중...")
+    print("서버 시작 중...")
     manager.initialize_model()
-    print("✅ 서버 준비 완료!")
+    print("서버 준비 완료!")
     yield
     # 종료 시
-    print("🛑 서버 종료 중...")
+    print("서버 종료 중...")
     manager.shutdown()
-    print("✅ 서버 종료 완료!")
+    print("서버 종료 완료!")
 
 
 app = FastAPI(
@@ -70,7 +70,7 @@ async def list_streams():
     return manager.get_all_streams()
 
 
-# ⚠️ 중요: /api/streams/by-input은 /api/streams/{stream_id}보다 먼저 정의해야 함!
+# 중요: /api/streams/by-input은 /api/streams/{stream_id}보다 먼저 정의해야 함!
 # 그렇지 않으면 "by-input"이 stream_id로 인식됨
 @app.get("/api/streams/by-input", tags=["Streams"])
 async def get_output_url_by_input(
@@ -83,7 +83,7 @@ async def get_output_url_by_input(
     info = manager.get_stream_by_input_url(input_url)
     
     if not info:
-        print(f"[API] ❌ 스트림 없음, 자동 생성 시도: {input_url}", flush=True)
+        print(f"[API] 스트림 없음, 자동 생성 시도: {input_url}", flush=True)
         sys.stdout.flush()
         try:
             generated = _generate_output_url(input_url)
@@ -95,17 +95,17 @@ async def get_output_url_by_input(
                 blur_settings=BlurSettings()
             )
             info = manager.create_stream(new_stream)
-            print(f"[API] ✅ 스트림 자동 생성 완료: {info.id}, output_url: {info.output_url}", flush=True)
+            print(f"[API] 스트림 자동 생성 완료: {info.id}, output_url: {info.output_url}", flush=True)
             sys.stdout.flush()
         except Exception as e:
-            print(f"[API] ❌ 자동 생성 실패: {e}", flush=True)
+            print(f"[API] 자동 생성 실패: {e}", flush=True)
             sys.stdout.flush()
             raise HTTPException(
                 status_code=500,
                 detail=f"입력 URL '{input_url}'로 스트림을 생성할 수 없습니다: {e}"
             )
     
-    print(f"[API] ✅ 스트림 찾음: {info.id}, output_url: {info.output_url}", flush=True)
+    print(f"[API] 스트림 찾음: {info.id}, output_url: {info.output_url}", flush=True)
     sys.stdout.flush()
     
     # 출력 URL만 반환

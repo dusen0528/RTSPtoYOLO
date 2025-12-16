@@ -19,8 +19,8 @@ class StreamStatus(str, Enum):
 class AnonymizeMethod(str, Enum):
     """익명화 방법"""
     BLUR = "blur"           # 가우시안 블러 (느림, 부드러움)
-    PIXELATE = "pixelate"   # 픽셀화 (빠름, 효율적) ⚡
-    MOSAIC = "mosaic"       # 모자이크 (빠름, 효율적) ⚡
+    PIXELATE = "pixelate"   # 픽셀화 (빠름, 효율적)
+    MOSAIC = "mosaic"       # 모자이크 (빠름, 효율적)
     BLACK = "black"         # 검은 박스 (가장 빠름)
     SOLID = "solid"         # 단색 채우기 (빠름)
 
